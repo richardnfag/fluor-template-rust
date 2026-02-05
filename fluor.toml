@@ -1,0 +1,7 @@
+[function]
+name = "myfn"
+language = "rust"
+
+[trigger]
+type = "http"
+route = "/myfn"
