@@ -6,6 +6,7 @@ Starter template for a Fluor function in Rust.
 
 - Rust stable
 - `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
+- `just`: `cargo install just`
 - `wasm-tools`: `cargo install --locked wasm-tools`
 
 ## Build
