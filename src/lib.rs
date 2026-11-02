@@ -48,22 +48,14 @@ fn get_items(
         items.retain(|item| *item == name);
     }
 
+    let items = items
+        .iter()
+        .map(|item| serde_json::json!({ "name": item }))
+        .collect::<Vec<_>>();
     Ok(respond(
         200,
         request_id.as_deref(),
-        &format!(
-            "{{\"function\":{},\"language\":\"rust\",\"method\":{},\"path\":{},\"query\":{},\"requestId\":{},\"items\":[{}]}}",
-            json_string(FUNCTION_NAME),
-            json_string(&request.method),
-            json_string(&request.path),
-            json_optional(request.query.as_deref()),
-            json_optional(request_id.as_deref()),
-            items
-                .iter()
-                .map(|item| format!(r#"{{"name":{}}}"#, json_string(item)))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
+        &document(request, request_id.as_deref(), "items", serde_json::Value::Array(items)),
     ))
 }
 
@@ -80,14 +72,11 @@ fn create_item(
     Ok(respond(
         201,
         request_id.as_deref(),
-        &format!(
-            "{{\"function\":{},\"language\":\"rust\",\"method\":{},\"path\":{},\"query\":{},\"requestId\":{},\"created\":{{\"name\":{}}}}}",
-            json_string(FUNCTION_NAME),
-            json_string(&request.method),
-            json_string(&request.path),
-            json_optional(request.query.as_deref()),
-            json_optional(request_id.as_deref()),
-            json_string(&name)
+        &document(
+            request,
+            request_id.as_deref(),
+            "created",
+            serde_json::json!({ "name": name }),
         ),
     ))
 }
@@ -102,24 +91,20 @@ fn update_item(
             "query parameter id is required",
         )
     })?;
-    if !request.body.trim_start().starts_with('{') {
-        return Err(failure(
+    let body = json_object(&request.body).ok_or_else(|| {
+        failure(
             bindings::exports::fluor::fun::handler::ErrorCode::BadRequest,
             "body must be a JSON object",
-        ));
-    }
+        )
+    })?;
     Ok(respond(
         200,
         request_id.as_deref(),
-        &format!(
-            "{{\"function\":{},\"language\":\"rust\",\"method\":{},\"path\":{},\"query\":{},\"requestId\":{},\"updated\":{{\"id\":{},\"body\":{}}}}}",
-            json_string(FUNCTION_NAME),
-            json_string(&request.method),
-            json_string(&request.path),
-            json_optional(request.query.as_deref()),
-            json_optional(request_id.as_deref()),
-            json_string(&id),
-            json_string(request.body.trim())
+        &document(
+            request,
+            request_id.as_deref(),
+            "updated",
+            serde_json::json!({ "id": id, "body": body }),
         ),
     ))
 }
@@ -137,14 +122,11 @@ fn delete_item(
     Ok(respond(
         200,
         request_id.as_deref(),
-        &format!(
-            "{{\"function\":{},\"language\":\"rust\",\"method\":{},\"path\":{},\"query\":{},\"requestId\":{},\"deleted\":{}}}",
-            json_string(FUNCTION_NAME),
-            json_string(&request.method),
-            json_string(&request.path),
-            json_optional(request.query.as_deref()),
-            json_optional(request_id.as_deref()),
-            json_string(&id)
+        &document(
+            request,
+            request_id.as_deref(),
+            "deleted",
+            serde_json::Value::String(id),
         ),
     ))
 }
@@ -189,40 +171,72 @@ fn header_value(
     })
 }
 
+fn document(
+    request: &Request,
+    request_id: Option<&str>,
+    field: &str,
+    value: serde_json::Value,
+) -> String {
+    let mut payload = serde_json::json!({
+        "function": FUNCTION_NAME,
+        "language": "rust",
+        "method": request.method,
+        "path": request.path,
+        "query": request.query,
+        "requestId": request_id,
+    });
+    payload[field] = value;
+    payload.to_string()
+}
+
 fn query_param(query: Option<&str>, key: &str) -> Option<String> {
     let query = query?;
     query.split('&').find_map(|part| {
         let (name, value) = part.split_once('=')?;
-        (name == key).then(|| value.to_string())
+        (form_decode(name) == key).then(|| form_decode(value))
     })
 }
 
-fn json_string_field(body: &str, field: &str) -> Option<String> {
-    let needle = format!("\"{field}\"");
-    let rest = body.get(body.find(&needle)? + needle.len()..)?;
-    let rest = rest.trim_start().strip_prefix(':')?.trim_start();
-    let rest = rest.strip_prefix('"')?;
-    let mut value = String::new();
-    let mut escaped = false;
-    for ch in rest.chars() {
-        if escaped {
-            value.push(ch);
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' => escaped = true,
-            '"' => return Some(value),
-            _ => value.push(ch),
+fn form_decode(value: &str) -> String {
+    let mut bytes = Vec::new();
+    let input = value.as_bytes();
+    let mut index = 0;
+    while index < input.len() {
+        match input[index] {
+            b'+' => {
+                bytes.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < input.len() => {
+                let Some(byte) = input
+                    .get(index + 1..index + 3)
+                    .and_then(|hex| std::str::from_utf8(hex).ok())
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                else {
+                    return value.to_string();
+                };
+                bytes.push(byte);
+                index += 3;
+            }
+            byte => {
+                bytes.push(byte);
+                index += 1;
+            }
         }
     }
-    None
+    String::from_utf8(bytes).unwrap_or_else(|_| value.to_string())
 }
 
-fn json_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+fn json_object(body: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+    match serde_json::from_str(body) {
+        Ok(serde_json::Value::Object(object)) => Some(object),
+        _ => None,
+    }
 }
 
-fn json_optional(value: Option<&str>) -> String {
-    value.map(json_string).unwrap_or_else(|| "null".to_string())
+fn json_string_field(body: &str, field: &str) -> Option<String> {
+    match json_object(body)?.get(field)? {
+        serde_json::Value::String(value) if !value.is_empty() => Some(value.clone()),
+        _ => None,
+    }
 }
