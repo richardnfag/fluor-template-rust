@@ -1,7 +1,7 @@
 [function]
-name = "myfn"
+name = "{{project-name}}"
 language = "rust"
 
 [trigger]
 type = "http"
-route = "/myfn"
+route = "/{{project-name}}"

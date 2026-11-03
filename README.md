@@ -1,19 +1,33 @@
 # {{project-name}}
 
-## Usage
+Starter template for a Fluor function in Rust.
 
-## Configuration
+## Requirements
 
-Edit the [fluor.toml](fluor.toml) file to configure your function.
-
-## Implementation
-
-Edit the [lib.rs](./src/lib.rs) file to implement your function.
+- Rust stable
+- `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
+- `just`: `cargo install just`
+- `wasm-tools`: `cargo install --locked wasm-tools`
 
 ## Build
 
-Run `fluor build` to build your function. In `/out` directory, you will find the compiled function.
+```bash
+just build
+```
+
+This produces `out/{{crate_name}}.wasm`.
+
+The generated component implements Fluor's `v2` contract:
+- exported `handler` interface
+- `request`/`response` records
+- `result<response, error>` return type
+
+## Inspect
+
+```bash
+just inspect
+```
 
 ## Publish
 
-Run `fluor publish` to publish your function.
+Update [fluor.toml](fluor.toml) as needed and publish the generated component with your Fluor workflow.
